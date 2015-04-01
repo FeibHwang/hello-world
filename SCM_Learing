@@ -1,0 +1,474 @@
+/*
+	main.c
+	数码管的动态扫描显示
+*/
+
+
+#include <reg51.h>
+#include <absacc.h>
+#include <ctype.h>
+
+//全局变量定义____________________________________________________________________________________________________________________________________________
+
+//定义显示缓冲区（由定时中断程序自动扫描）
+unsigned char DispBuf[8];
+//定义LED显示参数
+sbit LED = P2^4;
+
+//定义按键
+sbit KEY1 = P2^1;		//按键1
+//定义TLC549操作接口
+sbit CS = P1^5;
+sbit DAT = P1^7;
+sbit CLK = P1^6;
+//定义蜂鸣器借接口
+sbit BUZZER = P1^0;
+
+unsigned char cnt;	//定义计数器变量
+
+sbit PWM = P3^0;		//按键2，使PWM方波占空比减少（LED变亮）
+
+
+//定义PWM最大级数
+#define PWM_MAX		8
+
+
+//定义PWM级数，分为0〜PWM_MAX-1级
+unsigned char PwmValue;
+
+//定义中断频率：蜂鸣器频率
+unsigned char VOL = 0;
+
+unsigned char k;		//定义实验2状态指示器，总使能
+unsigned char c_0;		//定义实验2状态指示器
+unsigned char c_1;		//定义实验2状态指示器
+unsigned char c_2;		//定义实验2状态指示器
+
+//________________________________________________________________________________________________
+
+
+
+
+
+
+//中断____________________________________________________________________________________________________________________________________________________
+
+/*
+函数：T1INTSVC()
+功能：定时器T1的中断服务函数
+*/
+void T1INTSVC() interrupt 3
+{
+	static unsigned char temp = 0;	
+
+//******************************************************************************数码管扫描
+	code unsigned char com[] = {0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80};
+	static unsigned char n = 0;
+	TR1 = 0;
+	switch (VOL)
+	{
+		case (0): 
+//			TH1 = 0xFC;                          //原始终端定时器
+			TH1 = 0xF1;                          //情况0: 电压值为0时频率设定
+			break;
+		case (1): 
+			TH1 = 0xF8;                          //情况1: 电压值为1时频率设定
+			break;
+		case (2): 
+			TH1 = 0xFF;                          //情况2: 电压值为2时频率设定
+			break;
+		default:
+			break;
+	}
+	TL1 = 0x66;
+	
+	TR1 = 1;
+	XBYTE[0x7800] = 0xFF;		//暂停显示
+	XBYTE[0x7801] = ~DispBuf[n];	//更新扫描数据
+	XBYTE[0x7800] = ~com[n];	//重新显示
+	n++;
+	n &= 0x07;
+//*****************************************************************************第二阶段功能中断模块：LED亮度控制及蜂鸣器使能
+	
+	if (cnt==0)                             //阶段模式判断
+	{
+			
+		temp++;
+		if ( temp >= PWM_MAX ) temp = 0;
+		if ( temp <= PwmValue )
+		{
+			P0 =0xff;
+			PWM=1;
+		}
+		else
+		{
+			P0= 0x00;
+			PWM=0;
+		}
+
+		if (c_0 && c_1 && c_2)      //当case0~2的3个指示值都为1时才会触发蜂鸣器
+		{
+			BUZZER = !BUZZER;	//翻转BUZZER，以产生方波
+		}
+
+	}
+}
+
+
+
+
+
+//函数定义____________________________________________________________________________________________________________________________________________________
+//=================================数码管==================================
+
+/*
+函数：DispClear()
+功能：清除数码管的所有显示
+*/
+void DispClear()
+{
+	unsigned char i;
+	for ( i=0; i<8; i++ )
+	{
+		DispBuf[i] = 0x00;
+	}
+}
+
+void DispInit()
+{
+	DispClear();	//初始为全灭
+	EA = 0;
+	TMOD &= 0x0F;
+	TMOD |= 0x10;
+	TH1 = 0xFC;
+	TL1 = 0x66;
+	TR1 = 1;
+	ET1 = 1;
+	EA = 1;
+}
+
+/*
+函数：DispChar()
+功能：在数码管上显示字符
+参数：
+	x：数码管的坐标位置（0〜7）
+	c：要显示的字符（仅限16进制数字和减号）
+	dp：是否显示小数点，0－不显示，1－显示
+
+void DispChar(unsigned char x, unsigned char c, bit dp)
+{
+	code unsigned char Tabb[] =
+	{//定义0123456789AbCdEF的数码管字型数据
+		0x3F,0x06,0x5B,0x4F,0x66,0x6D,0x7D,0x07,
+		0x7F,0x6F,0x77,0x7C,0x39,0x5E,0x79,0x71
+	};
+	unsigned char t;	//临时变量
+//防止显示位置超出范围
+	x &= 0x07;
+	x = 7 - x;
+//分析字符c，取得对应的数码管字型数据
+	if ( c == '-' )
+	{
+		t = 0x40;
+	}
+	else
+	{
+		t = toint(c);	//toint()为库函数，详见C:\Keil\C51\HLP\C51.pdf
+		if ( t < 16 )	//如果是16进制字符
+		{
+			t = Tabb[t];	//查表，取得数码管字型数据
+		}
+		else
+		{
+			t = 0x00;	//如果是其它字符则显示为空白
+		}
+	}
+//检查是否显示小数点
+	if ( dp )
+	{
+		t |= 0x80;
+	}
+	else
+	{
+		t &= 0x7F;
+	}
+//送到显示缓冲区显示
+	DispBuf[x] = t;
+}
+*/
+
+/*
+函数：DispStr()
+功能：在数码管上显示字符串
+参数：
+	x：显示的起始位置（0〜7）
+	*s：要显示的字符串（内容仅限16进制数字和减号）
+
+void DispStr(unsigned char x, unsigned char idata *s)
+{
+	unsigned char c;
+	for (;;)
+	{
+		c = *s++;
+		if ( c == '\0' ) break;
+		DispChar(x++,c,0);
+	}
+}
+*/
+
+//=================================按键==================================
+
+/*
+函数：KeyScan()
+功能：键盘扫描
+返回：扫描到的键值
+*/
+unsigned char KeyScan()
+{
+	unsigned char k = '\0';
+	if ( KEY1 == 0 ) k = '+';
+	return k;
+}
+
+
+/*
+函数：Delay()
+功能：延时0.001〜65.536s
+参数：
+	t>0时，延时(t*0.001)s
+	t=0时，延时65.536s
+*/
+void Delay(unsigned int t)
+{
+	do
+	{
+		TH0 = 0xFA;
+		TL0 = 0x24;
+		TR0 = 1;
+		while ( !TF0 );
+		TR0 = 0;
+		TF0 = 0;
+	} while ( --t != 0 );
+}
+
+//=================================ADC==================================
+
+/*
+函数：ReadAdc()
+功能：读取A/D转换结果
+返回：8位ADC代码
+*/
+unsigned char ReadAdc()
+{
+	unsigned char d;
+	unsigned char n;
+	CS = 0;
+	n = 5;
+	while ( --n != 0 );
+	n = 8;
+	do
+	{
+		d <<= 1;
+		if ( DAT ) d++;
+		CLK = 1;
+		CLK = 0;
+	}while ( --n != 0 );
+	CS = 1;
+	return d;
+}
+
+/*
+函数：AdcInit()
+功能：初始化ADC接口
+*/
+void AdcInit()
+{
+	CS = 1;
+	CLK = 0;
+	DAT = 1;
+	ReadAdc();
+}
+
+//________________________________________________________________________________________________
+
+//初始化____________________________________________________________________________________________________________________________________________________
+void SysInit()
+{
+	TMOD &= 0xF0;
+	TMOD |= 0x01;	//设置定时器T0为16位定时器
+	PwmValue = PWM_MAX / 2;		//设置PWM初值（中间等级亮度）
+	PWM = 1;		//PWM管脚为高
+	DispInit();		//数码管扫描显示初始化
+	AdcInit();      //ADC初始化
+	Delay(100);
+}
+
+//________________________________________________________________________________________________
+
+void main()
+{
+
+
+	code unsigned char Tab[] =
+	{//定义0123456789AbCdEF的数码管字型数据
+		0x3F,0x06,0x5B,0x4F,0x66,0x6D,0x7D,0x07,
+		0x7F,0x6F,0x77,0x7C,0x39,0x5E,0x79,0x71
+		};
+
+	code unsigned char LEDD[] =
+	{//定义LED流水灯显示数据
+		0x80,0x40,0x20,0x10,0x08,0x04,0x02,0x01
+		};
+
+	unsigned char i;        //循环计数，16位，第一阶段15～0逆序计数
+	unsigned char j;        //循环计数，20位，第一阶段1s延时计数器，定义20次按键检测
+	unsigned char l;        //循环计数，20位，第二阶段，蜂鸣器延时0.2s，定义20次按键检测
+
+
+	bit dp;
+
+	unsigned int v;			//电压值
+	unsigned char v_dig1;
+	unsigned char v_dig2;
+
+	SysInit();				//系统初始化
+	dp = 0;
+	cnt = 1;
+	c_0=1;
+	c_1=1;
+	c_2=1;
+	DispBuf[7] = Tab[2];
+	DispBuf[6] = Tab[0];
+	DispBuf[5] = Tab[0];
+	DispBuf[4] = Tab[3];
+	DispBuf[3] = Tab[1];    
+	DispBuf[2] = 0x40;
+
+	while(1)                                                         //主循环
+	{
+
+
+
+		if (cnt==1)                               //＊＊＊＊＊＊模式判断，模式1＊＊＊＊＊＊
+		{
+			for(;;)
+			{
+    			for ( i=1; i<=16; i++ )
+				{
+					P0=LEDD[(i-1)%8];                                  //LED流水灯
+
+					DispBuf[0] = Tab[(16-i) % 10];                     //15~0倒计时
+					DispBuf[1] = Tab[(16-i) / 10];
+
+					for (j=1; j<=20; j++)
+					{	Delay(50);		//延时50ms
+						if ( KeyScan()!= '\0' ) break;		           //如果有键按下，退出循环
+					}
+					if ( KeyScan()!= '\0' ) break;		               //如果有键按下，退出循环
+
+				}  
+				dp = !dp;
+				if ( KeyScan()!= '\0' )		                           //如果有键按下，切换状态值，退出循环
+ 			    {
+					cnt=0;
+					break;
+				}
+			}
+		}
+
+		P0=0x00;                              //LED全灭
+		for (;;)			                  //等待按键抬起
+		{
+			Delay(50);
+			if ( KeyScan() == '\0' ) break;
+		}
+		k = 1;
+
+
+		if (cnt==0)                                  //＊＊＊＊＊＊模式判断，模式2＊＊＊＊＊＊
+		{
+			for(;;)
+			{
+				v = ReadAdc();		            //读取ADC值(A/D转换的数字量结果)
+				v = v * 250 / 256;	            //转换成电压值，此处250为ADC参考电压2.5V，用整形数表示后，单位为10mV
+		
+				v_dig2 = v/100;					//分离出电压值得百位数（即多少伏）
+				v_dig1 = (v-v_dig2*100)/10;		//分离出电压值得十位数（即多少个0.1V）
+
+				DispBuf[0] = Tab[v_dig1];
+				DispBuf[1] = Tab[v_dig2] + 0x80;	//以"V"为单位的数字，带小数点显示
+				Delay(300);		//延时300ms
+
+				if ( KeyScan()!= '\0' )		                           //如果有键按下，切换状态值，退出循环
+ 			    {
+				cnt=1;
+				break;
+				}
+
+				switch (v_dig2)
+				{
+					case 0: 
+						VOL = 0;                                        //中转值，用于定义中断频率
+						PwmValue = 0;
+						c_1 =1;                                         //case1状态位使能
+
+						for (l=1;l<=20;l++)
+						{
+							Delay (10);
+							if ( KeyScan()!= '\0' ) break;		               //如果有键按下，退出选择
+							if (l==20)
+ 						    {
+							 c_0=0;                                      //0.2s 后 case0 状态位调0，蜂鸣器失效
+							 }
+						}						
+						break;
+					case 1: 
+						VOL = 1;
+						PwmValue = PWM_MAX / 2-1;
+						c_0=1;
+						c_2=1;
+						for (l=1;l<=20;l++)
+						{
+							Delay (10);
+							if ( KeyScan()!= '\0' ) break;		               //如果有键按下，退出选择
+							if (l==20)
+ 						    {
+							 c_1=0;                                      //0.2s 后 case1 状态位调0，蜂鸣器失效
+							 }
+						}
+						break;
+					case 2: 
+						VOL = 2;
+						PwmValue = PWM_MAX;
+						c_1 =1;
+						for (l=1;l<=20;l++)
+						{
+							Delay (10);
+							if ( KeyScan()!= '\0' ) break;		               //如果有键按下，退出选择
+							if (l==20) 
+ 						    {
+							 c_2=0;                                      //0.2s 后 case2 状态位调0，蜂鸣器失效
+							 }
+						}
+						break;
+					default:
+						break;
+				}
+
+				if ( KeyScan()!= '\0' )		                           //如果有键按下，切换状态值，退出循环
+ 			    {
+				cnt=1;
+				break;
+				}
+			}
+		}
+
+			//等待按键抬起
+		for (;;)
+		{
+			Delay(50);
+			if ( KeyScan() == '\0' ) break;
+		}
+			
+	}
+}
